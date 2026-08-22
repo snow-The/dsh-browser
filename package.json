@@ -1,6 +1,6 @@
 {
   "name": "@snow-the/dsh-browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser interaction for DeepSeek Harness: drive local Chrome/Edge via playwright-core (CDP). Open, snapshot, click, type, scroll, evaluate, screenshot. Real browser, local-only.",
   "type": "module",
   "main": "./lib/index.js",
