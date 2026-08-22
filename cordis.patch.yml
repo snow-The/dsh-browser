@@ -1,0 +1,8 @@
+# dsh-browser - drive the local browser (Chrome/Edge) via CDP.
+#
+# Host plugin: registers browser_* tools (open/snapshot/click/type/scroll/
+# evaluate/screenshot). Browser instance is lazy-launched on first tool call
+# and reused across calls; closed on plugin dispose.
+- insert:
+    - id: browser
+      name: '@snow-the/dsh-browser'
