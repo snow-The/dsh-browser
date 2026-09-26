@@ -28,6 +28,7 @@
     "playwright-core": "^1.62.1"
   },
   "scripts": {
-    "check": "node --check lib/index.js"
+    "check": "node --check lib/index.js",
+    "test": "node --import ./test/register-stubs.mjs --test \"test/*.test.mjs\""
   }
 }
