@@ -267,10 +267,72 @@ test('our reader parses TEXT vectors and rejects BLOB rows -- the reason the fil
   );
 });
 
+test('the cross-read failure is ASYMMETRIC: we crash loudly, dsh-search fails silently', async () => {
+  // Measured through a REAL SQLite round-trip (measure-crossread2.mjs), which matters: a first
+  // attempt approximated the read with `new Float32Array(vec.buffer)` and hand-built rows via
+  // Buffer.from(string), and reported a bogus 16384-byte length -- that was Node's 8 KB allocation
+  // POOL leaking through, not the plugin's behaviour. The real code reads
+  // `new Float32Array(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength / 4)`.
+  //
+  //   our reader  JSON.parse(row.vec) on a BLOB      -> throws SyntaxError          (loud)
+  //   their reader Float32Array(view) on a TEXT row  -> a ZERO-LENGTH vector, no throw (silent)
+  //
+  // The mechanism of the silence is worth naming: sqlite hands a TEXT column back as a JS **string**,
+  // and `"...." .buffer` is **undefined**, so `new Float32Array(undefined, ...)` yields an empty
+  // array. A zero-length vector makes their cosine() sum nothing and return 0, so every score ties at
+  // 0 and search quietly stops discriminating. A loud crash is a bug report; a silent wrong answer is
+  // a corrupted conclusion -- which is why this boundary cannot be left to "the newer reader copes".
+  //
+  // Also measured: declaring the column TEXT vs BLOB changes nothing at all. SQLite type affinity
+  // does not validate stored values, so the DDL cannot defend this boundary -- only separate files can.
+  const tools = registerAll();
+  await toolNamed(tools, 'browser_corpus_clear').execute({});
+
+  const THEIRS = (vec) => new Float32Array(vec.buffer, vec.byteOffset, vec.byteLength / 4);
+  const theirCosine = (a, b) => {
+    let s = 0;
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) s += a[i] * b[i];
+    return s;
+  };
+  const vec = [0.25, 0.5, 0.75, 1];
+
+  const d = new DatabaseSync(DB_PATH);
+  try {
+    const ins = d.prepare('INSERT INTO corpus (url, chunk, vec) VALUES (?, ?, ?)');
+    ins.run('https://text.example', 'their row', JSON.stringify(vec));                              // what we write
+    ins.run('https://blob.example', 'our row', Buffer.from(new Float32Array(vec).buffer));           // what they write
+
+    const rows = d.prepare('SELECT chunk, vec FROM corpus ORDER BY id').all();
+    assert.equal(typeof rows[0].vec, 'string', 'a TEXT column must come back as a JS string');
+    assert.ok(rows[1].vec instanceof Uint8Array, 'a BLOB column must come back as bytes');
+
+    // Their read of OUR row: silent, and that silence is the finding -- so assert it, not just note it.
+    const decoded = THEIRS(rows[0].vec);
+    assert.equal(decoded.length, 0, 'their reader on our TEXT row must yield zero-length, not throw');
+    assert.equal(theirCosine(decoded, new Float32Array(vec)), 0, 'and every score must collapse to 0');
+
+    // Their read of their OWN row: exact. Control, so the above is the encoding mismatch and not a
+    // broken harness.
+    assert.deepEqual(Array.from(THEIRS(rows[1].vec)), vec, 'their reader on their own BLOB must be exact');
+  } finally {
+    d.close();
+  }
+
+  // Our read of THEIR row: loud. (Asserted through the real tool, not a reimplementation.)
+  await assert.rejects(
+    () => toolNamed(tools, 'browser_corpus_search').execute({ query: 'anything' }),
+    (err) => {
+      assert.ok(err instanceof SyntaxError, `expected SyntaxError, got ${err?.name}: ${err?.message}`);
+      return true;
+    },
+    'our JSON.parse on their BLOB row must throw loudly',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // 4. corpus lifecycle
 // ---------------------------------------------------------------------------
-
 test('corpus search on an untouched corpus reports empty instead of throwing', async () => {
   const tools = registerAll();
   await toolNamed(tools, 'browser_corpus_clear').execute({});
